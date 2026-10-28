@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DOOM 3D Test Lab — Prototype 0.1</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#101216; color:#e8e8e8; font:14px/1.4 system-ui,Segoe UI,Arial,sans-serif; overflow:hidden; }
+  #view { display:block; width:100vw; height:100vh; }
+  #panel { display:none; position:fixed; top:12px; left:12px; width:min(350px,calc(100vw - 24px)); padding:12px 14px; background:rgba(10,13,17,.88); border:1px solid #58616b; border-radius:8px; box-shadow:0 4px 20px #0008; }
+  h1 { margin:0 0 7px; font-size:17px; }
+  .sub { color:#b7c1cb; font-size:12px; margin-bottom:9px; }
+  #stats { display:grid; grid-template-columns:1fr 1fr; gap:5px 12px; font-variant-numeric:tabular-nums; }
+  .metric { display:flex; justify-content:space-between; gap:8px; border-bottom:1px solid #303741; padding:3px 0; }
+  .metric span { color:#b7c1cb; }
+  .metric b { color:#fff; }
+  #controls { margin-top:9px; color:#d0d6dc; font-size:12px; }
+  button { margin:7px 5px 0 0; background:#252c34; color:#fff; border:1px solid #64707d; border-radius:4px; padding:6px 8px; cursor:pointer; }
+  button:hover { background:#35414d; }
+  #notice { display:none; }
+  #touchControls { position:fixed; inset:auto 0 14px 0; display:flex; justify-content:space-between; align-items:flex-end; padding:0 14px; pointer-events:none; }
+  .pad { display:grid; grid-template-columns:repeat(3,52px); grid-template-rows:repeat(2,52px); gap:6px; pointer-events:auto; }
+  .moveBtn { border:1px solid #aeb7c2; background:rgba(18,23,30,.76); color:#fff; border-radius:12px; font-size:22px; min-width:48px; min-height:48px; touch-action:none; user-select:none; -webkit-user-select:none; }
+  .moveBtn:active { background:rgba(80,100,120,.9); }
+  .moveBtn.up { grid-column:2; grid-row:1; } .moveBtn.left { grid-column:1; grid-row:2; } .moveBtn.down { grid-column:2; grid-row:2; } .moveBtn.right { grid-column:3; grid-row:2; }
+  .vertical { display:flex; flex-direction:column; gap:6px; pointer-events:auto; }
+  .lookHint { position:fixed; top:12px; left:12px; right:12px; text-align:center; color:#fff; font-size:12px; text-shadow:0 1px 4px #000; pointer-events:none; }
+  @media (hover:hover) and (pointer:fine) { #touchControls { display:none; } .lookHint { display:none; } }
+  #error { color:#ffb4a8; margin-top:7px; white-space:pre-wrap; }
+  kbd { background:#252c34; padding:1px 4px; border-radius:3px; border:1px solid #4c5661; }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="3D prototype viewport"></canvas>
+<section id="panel">
+  <h1>DOOM 3D Test Lab <span style="color:#a4b3c4">0.3</span></h1>
+  <div class="sub">Mobile-friendly camera test · not yet the Freedoom map</div>
+  <div id="stats">
+    <div class="metric"><span>FPS</span><b id="fps">—</b></div>
+    <div class="metric"><span>Frame time</span><b id="ms">—</b></div>
+    <div class="metric"><span>Scene objects</span><b id="total">—</b></div>
+    <div class="metric"><span>In view</span><b id="visible">—</b></div>
+    <div class="metric"><span>Frustum rejected</span><b id="rejected">—</b></div>
+    <div class="metric"><span>Draw calls</span><b id="draws">—</b></div>
+    <div class="metric"><span>Triangles drawn</span><b id="tris">—</b></div>
+    <div class="metric"><span>Render scale</span><b id="scale">100%</b></div>
+    <div class="metric"><span>Camera X / Z</span><b id="pos">—</b></div>
+    <div class="metric"><span>Wireframe</span><b id="wire">OFF</b></div>
+  </div>
+  <div>
+    <button id="wireBtn">Toggle wireframe</button>
+    <button id="cullBtn">Frustum culling: ON</button>
+    <button id="resetBtn">Reset camera</button>
+    <button id="scaleBtn">Render scale: 100%</button>
+  </div>
+  <div id="controls">
+    Mobile: drag the scene to look and hold the arrow buttons to move. Desktop: click scene, move mouse, use WASD and Q/E.
+  </div>
+  <div id="error"></div>
+</section>
+<div id="notice">Prototype 0.3: touch controls enabled.</div>
+<div class="lookHint">Drag the scene to look around · hold the arrows to move</div>
+<div id="touchControls" aria-label="Touch movement controls">
+  <div class="pad">
+    <button class="moveBtn up" data-key="KeyW" aria-label="Move forward">▲</button>
+    <button class="moveBtn left" data-key="KeyA" aria-label="Move left">◀</button>
+    <button class="moveBtn down" data-key="KeyS" aria-label="Move backward">▼</button>
+    <button class="moveBtn right" data-key="KeyD" aria-label="Move right">▶</button>
+  </div>
+  <div class="vertical">
+    <button class="moveBtn" data-key="KeyE" aria-label="Move up">＋</button>
+    <button class="moveBtn" data-key="KeyQ" aria-label="Move down">－</button>
+    <button class="moveBtn" id="touchReset" aria-label="Reset camera" style="font-size:14px">RESET</button>
+  </div>
+</div>
+<script>
+(() => {
+'use strict';
+const canvas = document.getElementById('view');
+const errorEl = document.getElementById('error');
+let gl;
+try { gl = canvas.getContext('webgl', {antialias:false, alpha:false, powerPreference:'low-power'}); }
+catch(e) {}
+if (!gl) {
+  errorEl.textContent = 'WebGL 1 is unavailable in this browser/driver. Try enabling hardware acceleration or a browser with WebGL support.';
+  return;
+}
+const vs = `
+attribute vec3 aPos; attribute vec3 aNormal;
+uniform mat4 uMVP; uniform mat4 uModel; uniform vec3 uColor;
+varying vec3 vColor;
+void main(){
+  vec3 n=normalize(mat3(uModel)*aNormal);
+  float light=0.34+0.66*max(dot(n,normalize(vec3(-0.4,0.85,0.3))),0.0);
+  vColor=uColor*light;
+  gl_Position=uMVP*vec4(aPos,1.0);
+}`;
+const fs = `precision mediump float; varying vec3 vColor; void main(){gl_FragColor=vec4(vColor,1.0);}`;
+function shader(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;}
+let program;
+try {
+  program=gl.createProgram(); gl.attachShader(program,shader(gl.VERTEX_SHADER,vs)); gl.attachShader(program,shader(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(program);
+  if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+} catch(e) { errorEl.textContent='Shader initialisation failed: '+e.message; return; }
+gl.useProgram(program);
+const loc={pos:gl.getAttribLocation(program,'aPos'),normal:gl.getAttribLocation(program,'aNormal'),mvp:gl.getUniformLocation(program,'uMVP'),model:gl.getUniformLocation(program,'uModel'),color:gl.getUniformLocation(program,'uColor')};
+
+function cubeGeometry(){
+ const faces=[
+  [[1,0,0],[[.5,-.5,-.5],[.5,.5,-.5],[.5,.5,.5],[.5,-.5,.5]]],
+  [[-1,0,0],[[-.5,-.5,.5],[-.5,.5,.5],[-.5,.5,-.5],[-.5,-.5,-.5]]],
+  [[0,1,0],[[-.5,.5,-.5],[-.5,.5,.5],[.5,.5,.5],[.5,.5,-.5]]],
+  [[0,-1,0],[[-.5,-.5,.5],[-.5,-.5,-.5],[.5,-.5,-.5],[.5,-.5,.5]]],
+  [[0,0,1],[[-.5,-.5,.5],[.5,-.5,.5],[.5,.5,.5],[-.5,.5,.5]]],
+  [[0,0,-1],[[.5,-.5,-.5],[-.5,-.5,-.5],[-.5,.5,-.5],[.5,.5,-.5]]]
+ ];
+ const p=[],n=[];
+ for(const [normal,verts] of faces){const order=[0,1,2,0,2,3];for(const i of order){p.push(...verts[i]);n.push(...normal);}}
+ return {p:new Float32Array(p),n:new Float32Array(n),triangles:12};
+}
+const geo=cubeGeometry();
+const pbuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.bufferData(gl.ARRAY_BUFFER,geo.p,gl.STATIC_DRAW);
+gl.enableVertexAttribArray(loc.pos);gl.vertexAttribPointer(loc.pos,3,gl.FLOAT,false,0,0);
+const nbuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,nbuf);gl.bufferData(gl.ARRAY_BUFFER,geo.n,gl.STATIC_DRAW);
+gl.enableVertexAttribArray(loc.normal);gl.vertexAttribPointer(loc.normal,3,gl.FLOAT,false,0,0);
+gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+gl.clearColor(.035,.045,.06,1);
+
+const objects=[];
+function add(name,x,y,z,sx,sy,sz,color,type='structure'){
+ objects.push({name,pos:[x,y,z],scale:[sx,sy,sz],color,type,radius:Math.hypot(sx,sy,sz)*.5});
+}
+// Test chamber: floor, ceiling, walls, corridor extensions and pillars
+add('Floor',0,-.35,0,34,.7,30,[.27,.29,.31]);
+add('Ceiling',0,8.7,0,34,.5,30,[.17,.19,.22]);
+add('North wall',0,4.1,-15,34,8.5,.6,[.32,.30,.27]);
+add('South wall',0,4.1,15,34,8.5,.6,[.32,.30,.27]);
+add('West wall',-17,4.1,0,.6,8.5,30,[.32,.30,.27]);
+add('East wall',17,4.1,0,.6,8.5,30,[.32,.30,.27]);
+// doorway-like opening represented by wall sections, corridor beyond
+add('North corridor left',-9,4.1,-22,16,8.5,.6,[.28,.28,.30]);
+add('North corridor right',9,4.1,-22,16,8.5,.6,[.28,.28,.30]);
+add('North corridor floor',0,-.35,-22,18,.7,15,[.24,.26,.28]);
+add('North corridor ceiling',0,8.7,-22,18,.5,15,[.15,.17,.2]);
+add('North corridor end',0,4.1,-29,18,8.5,.6,[.32,.30,.27]);
+for(const x of [-12,-6,0,6,12]) for(const z of [-9,1,9]) add('Pillar',x,2.0,z,1.1,4.0,1.1,[.42,.39,.34]);
+for(let i=0;i<12;i++){
+ const x=-12+(i%6)*4.8, z=5+Math.floor(i/6)*-10;
+ add('Test monster '+(i+1),x,.85,z,1.0,1.7,.85,[.65,.13,.10],'monster');
+}
+for(let i=0;i<8;i++){
+ add('Test crate '+(i+1),-12+i*3.4,.55,-5,1.2,1.1,1.2,[.42,.25,.13],'prop');
+}
+add('Raised platform',0,.3,7,7,.6,3,[.36,.35,.32]);
+add('Platform block',0,1.3,7,2,2,2,[.43,.40,.35]);
+
+const mat4={
+ identity(){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);},
+ multiply(a,b){const o=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];return o;},
+ perspective(fov,aspect,near,far){const f=1/Math.tan(fov/2),nf=1/(near-far),o=new Float32Array(16);o[0]=f/aspect;o[5]=f;o[10]=(far+near)*nf;o[11]=-1;o[14]=2*far*near*nf;return o;},
+ lookAt(eye,center,up){let zx=eye[0]-center[0],zy=eye[1]-center[1],zz=eye[2]-center[2];let l=Math.hypot(zx,zy,zz)||1;zx/=l;zy/=l;zz/=l;let xx=up[1]*zz-up[2]*zy,xy=up[2]*zx-up[0]*zz,xz=up[0]*zy-up[1]*zx;l=Math.hypot(xx,xy,xz)||1;xx/=l;xy/=l;xz/=l;let yx=zy*xz-zz*xy,yy=zz*xx-zx*xz,yz=zx*xy-zy*xx;return new Float32Array([xx,yx,zx,0,xy,yy,zy,0,xz,yz,zz,0,-(xx*eye[0]+xy*eye[1]+xz*eye[2]),-(yx*eye[0]+yy*eye[1]+yz*eye[2]),-(zx*eye[0]+zy*eye[1]+zz*eye[2]),1]);},
+ model(pos,scale){const o=this.identity();o[0]=scale[0];o[5]=scale[1];o[10]=scale[2];o[12]=pos[0];o[13]=pos[1];o[14]=pos[2];return o;}
+};
+let cam={x:0,y:2.2,z:12,yaw:Math.PI,pitch:-.08};
+const start={...cam}; const keys={}; let wire=false,culling=true,scaleFactor=1,dragging=false,lastX=0,lastY=0;
+function reset(){cam={...start};}
+// Desktop uses pointer lock; mobile uses drag-to-look.
+canvas.addEventListener('click',()=>{if(matchMedia('(hover:hover) and (pointer:fine)').matches && document.pointerLockElement!==canvas)canvas.requestPointerLock?.();});
+document.addEventListener('pointerlockchange',()=>{dragging=document.pointerLockElement===canvas;});
+document.addEventListener('mousemove',e=>{if(!dragging)return;cam.yaw-=e.movementX*.0025;cam.pitch-=e.movementY*.0025;cam.pitch=Math.max(-1.45,Math.min(1.45,cam.pitch));});
+let lookPointer=null, lastTouchX=0, lastTouchY=0;
+canvas.addEventListener('pointerdown',e=>{if(e.pointerType==='touch'){lookPointer=e.pointerId;lastTouchX=e.clientX;lastTouchY=e.clientY;canvas.setPointerCapture?.(e.pointerId);}});
+canvas.addEventListener('pointermove',e=>{if(e.pointerType==='touch' && lookPointer===e.pointerId){const dx=e.clientX-lastTouchX,dy=e.clientY-lastTouchY;cam.yaw-=dx*.006;cam.pitch-=dy*.006;cam.pitch=Math.max(-1.45,Math.min(1.45,cam.pitch));lastTouchX=e.clientX;lastTouchY=e.clientY;}});
+function endLook(e){if(lookPointer===e.pointerId)lookPointer=null;}
+canvas.addEventListener('pointerup',endLook);canvas.addEventListener('pointercancel',endLook);
+document.querySelectorAll('[data-key]').forEach(btn=>{
+ const key=btn.dataset.key;
+ const startMove=e=>{e.preventDefault();keys[key]=true;btn.setPointerCapture?.(e.pointerId);};
+ const stopMove=e=>{e.preventDefault();keys[key]=false;};
+ btn.addEventListener('pointerdown',startMove);btn.addEventListener('pointerup',stopMove);btn.addEventListener('pointercancel',stopMove);btn.addEventListener('lostpointercapture',stopMove);
+});
+document.getElementById('touchReset')?.addEventListener('click',reset);
+window.addEventListener('keydown',e=>{keys[e.code]=true;if(['Space','ArrowUp','ArrowDown'].includes(e.code))e.preventDefault();});
+window.addEventListener('keyup',e=>keys[e.code]=false);
+document.getElementById('wireBtn').onclick=()=>{wire=!wire;document.getElementById('wire').textContent=wire?'ON':'OFF';};
+document.getElementById('cullBtn').onclick=()=>{culling=!culling;document.getElementById('cullBtn').textContent='Frustum culling: '+(culling?'ON':'OFF');};
+document.getElementById('resetBtn').onclick=reset;
+document.getElementById('scaleBtn').onclick=()=>{scaleFactor=scaleFactor===1?.75:scaleFactor===.75?.5:1;document.getElementById('scaleBtn').textContent='Render scale: '+Math.round(scaleFactor*100)+'%';document.getElementById('scale').textContent=Math.round(scaleFactor*100)+'%';resize();};
+function resize(){const dpr=Math.min(window.devicePixelRatio||1,1.5)*scaleFactor;const w=Math.max(1,Math.floor(innerWidth*dpr)),h=Math.max(1,Math.floor(innerHeight*dpr));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.viewport(0,0,w,h);}
+window.addEventListener('resize',resize);resize();
+function isVisible(obj,mvp){
+ // Conservative clip-space sphere test; avoids false rejection for most boxes.
+ const x=obj.pos[0],y=obj.pos[1],z=obj.pos[2];
+ const cx=mvp[0]*x+mvp[4]*y+mvp[8]*z+mvp[12];
+ const cy=mvp[1]*x+mvp[5]*y+mvp[9]*z+mvp[13];
+ const cz=mvp[2]*x+mvp[6]*y+mvp[10]*z+mvp[14];
+ const cw=mvp[3]*x+mvp[7]*y+mvp[11]*z+mvp[15];
+ const r=obj.radius;
+ const rx=r*Math.hypot(mvp[0],mvp[4],mvp[8]);
+ const ry=r*Math.hypot(mvp[1],mvp[5],mvp[9]);
+ const rz=r*Math.hypot(mvp[2],mvp[6],mvp[10]);
+ return cw>-r && cx+rx>=-cw && cx-rx<=cw && cy+ry>=-cw && cy-ry<=cw && cz+rz>=-cw && cz-rz<=cw;
+}
+let last=performance.now(),frames=0,fps=0,shown=0,draws=0,triangles=0;
+function frame(now){
+ const dt=Math.min((now-last)/1000,.05);last=now;frames++;
+ const speed=(keys.ShiftLeft?9:5)*dt;
+ const fx=Math.sin(cam.yaw),fz=Math.cos(cam.yaw);
+ if(keys.KeyW){cam.x+=fx*speed;cam.z+=fz*speed;}
+ if(keys.KeyS){cam.x-=fx*speed;cam.z-=fz*speed;}
+ if(keys.KeyA){cam.x+=Math.cos(cam.yaw)*speed;cam.z-=Math.sin(cam.yaw)*speed;}
+ if(keys.KeyD){cam.x-=Math.cos(cam.yaw)*speed;cam.z+=Math.sin(cam.yaw)*speed;}
+ if(keys.KeyQ)cam.y-=speed;if(keys.KeyE)cam.y+=speed;
+ cam.y=Math.max(.25,Math.min(8.2,cam.y));
+ resize();gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+ const dir=[Math.sin(cam.yaw)*Math.cos(cam.pitch),Math.sin(cam.pitch),Math.cos(cam.yaw)*Math.cos(cam.pitch)];
+ const view=mat4.lookAt([cam.x,cam.y,cam.z],[cam.x+dir[0],cam.y+dir[1],cam.z+dir[2]],[0,1,0]);
+ const proj=mat4.perspective(Math.PI/3,canvas.width/canvas.height,.1,100);
+ const vp=mat4.multiply(proj,view);
+ shown=0;draws=0;triangles=0;
+ for(const obj of objects){
+  const model=mat4.model(obj.pos,obj.scale),mvp=mat4.multiply(vp,model);
+  const visible=!culling||isVisible(obj,vp);
+  if(!visible)continue;
+  shown++;draws++;triangles+=geo.triangles;
+  gl.uniformMatrix4fv(loc.mvp,false,mvp);gl.uniformMatrix4fv(loc.model,false,model);gl.uniform3fv(loc.color,obj.color);
+  if(wire){gl.drawArrays(gl.LINE_STRIP,0,0);gl.drawArrays(gl.LINES,0,0); // wireframe is drawn below from indexed cube edges
+   drawWireCube(mvp,model,obj.color);
+  } else gl.drawArrays(gl.TRIANGLES,0,36);
+ }
+ if(now%700<dt*1000){fps=Math.round(frames/Math.max((now-(window._fpsStart||now))/1000,.001));window._fpsStart=now;frames=0;}
+ document.getElementById('fps').textContent=Number.isFinite(fps)?fps:'—';
+ document.getElementById('ms').textContent=(dt*1000).toFixed(1)+' ms';
+ document.getElementById('total').textContent=objects.length;
+ document.getElementById('visible').textContent=shown;
+ document.getElementById('rejected').textContent=culling?objects.length-shown:0;
+ document.getElementById('draws').textContent=draws;
+ document.getElementById('tris').textContent=triangles.toLocaleString();
+ document.getElementById('pos').textContent=cam.x.toFixed(1)+' / '+cam.z.toFixed(1);
+ requestAnimationFrame(frame);
+}
+const edgeVertices=new Float32Array([
+ -.5,-.5,-.5, .5,-.5,-.5, .5,-.5,-.5, .5,.5,-.5, .5,.5,-.5, -.5,.5,-.5, -.5,.5,-.5, -.5,-.5,-.5,
+ -.5,-.5,.5, .5,-.5,.5, .5,-.5,.5, .5,.5,.5, .5,.5,.5, -.5,.5,.5, -.5,.5,.5, -.5,-.5,.5,
+ -.5,-.5,-.5, -.5,-.5,.5, .5,-.5,-.5, .5,-.5,.5, .5,.5,-.5, .5,.5,.5, -.5,.5,-.5, -.5,.5,.5
+]);
+const edgeBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,edgeBuf);gl.bufferData(gl.ARRAY_BUFFER,edgeVertices,gl.STATIC_DRAW);
+function drawWireCube(mvp,model,color){gl.bindBuffer(gl.ARRAY_BUFFER,edgeBuf);gl.vertexAttribPointer(loc.pos,3,gl.FLOAT,false,0,0);gl.disableVertexAttribArray(loc.normal);gl.uniformMatrix4fv(loc.mvp,false,mvp);gl.uniformMatrix4fv(loc.model,false,model);gl.uniform3fv(loc.color,color);gl.drawArrays(gl.LINES,0,24);gl.enableVertexAttribArray(loc.normal);gl.bindBuffer(gl.ARRAY_BUFFER,nbuf);gl.vertexAttribPointer(loc.normal,3,gl.FLOAT,false,0,0);gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.vertexAttribPointer(loc.pos,3,gl.FLOAT,false,0,0);}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
