@@ -1,4 +1,4 @@
-<!doctype html>
+!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -9,7 +9,7 @@
   * { box-sizing: border-box; }
   body { margin:0; background:#101216; color:#e8e8e8; font:14px/1.4 system-ui,Segoe UI,Arial,sans-serif; overflow:hidden; }
   #view { display:block; width:100vw; height:100vh; }
-  #panel { position:fixed; top:12px; left:12px; width:min(350px,calc(100vw - 24px)); padding:12px 14px; background:rgba(10,13,17,.88); border:1px solid #58616b; border-radius:8px; box-shadow:0 4px 20px #0008; }
+  #panel { display:none; position:fixed; top:12px; left:12px; width:min(350px,calc(100vw - 24px)); padding:12px 14px; background:rgba(10,13,17,.88); border:1px solid #58616b; border-radius:8px; box-shadow:0 4px 20px #0008; }
   h1 { margin:0 0 7px; font-size:17px; }
   .sub { color:#b7c1cb; font-size:12px; margin-bottom:9px; }
   #stats { display:grid; grid-template-columns:1fr 1fr; gap:5px 12px; font-variant-numeric:tabular-nums; }
@@ -19,7 +19,15 @@
   #controls { margin-top:9px; color:#d0d6dc; font-size:12px; }
   button { margin:7px 5px 0 0; background:#252c34; color:#fff; border:1px solid #64707d; border-radius:4px; padding:6px 8px; cursor:pointer; }
   button:hover { background:#35414d; }
-  #notice { position:fixed; bottom:12px; left:12px; padding:8px 11px; background:#101216d9; border:1px solid #58616b; border-radius:6px; max-width:min(650px,calc(100vw - 24px)); font-size:12px; color:#c9d2dc; }
+  #notice { display:none; }
+  #touchControls { position:fixed; inset:auto 0 14px 0; display:flex; justify-content:space-between; align-items:flex-end; padding:0 14px; pointer-events:none; }
+  .pad { display:grid; grid-template-columns:repeat(3,52px); grid-template-rows:repeat(2,52px); gap:6px; pointer-events:auto; }
+  .moveBtn { border:1px solid #aeb7c2; background:rgba(18,23,30,.76); color:#fff; border-radius:12px; font-size:22px; min-width:48px; min-height:48px; touch-action:none; user-select:none; -webkit-user-select:none; }
+  .moveBtn:active { background:rgba(80,100,120,.9); }
+  .moveBtn.up { grid-column:2; grid-row:1; } .moveBtn.left { grid-column:1; grid-row:2; } .moveBtn.down { grid-column:2; grid-row:2; } .moveBtn.right { grid-column:3; grid-row:2; }
+  .vertical { display:flex; flex-direction:column; gap:6px; pointer-events:auto; }
+  .lookHint { position:fixed; top:12px; left:12px; right:12px; text-align:center; color:#fff; font-size:12px; text-shadow:0 1px 4px #000; pointer-events:none; }
+  @media (hover:hover) and (pointer:fine) { #touchControls { display:none; } .lookHint { display:none; } }
   #error { color:#ffb4a8; margin-top:7px; white-space:pre-wrap; }
   kbd { background:#252c34; padding:1px 4px; border-radius:3px; border:1px solid #4c5661; }
 </style>
@@ -27,8 +35,8 @@
 <body>
 <canvas id="view" aria-label="3D prototype viewport"></canvas>
 <section id="panel">
-  <h1>DOOM 3D Test Lab <span style="color:#a4b3c4">0.1</span></h1>
-  <div class="sub">WebGL 1 scaffold · geometry/camera/culling test · not yet the Freedoom map</div>
+  <h1>DOOM 3D Test Lab <span style="color:#a4b3c4">0.3</span></h1>
+  <div class="sub">Mobile-friendly camera test · not yet the Freedoom map</div>
   <div id="stats">
     <div class="metric"><span>FPS</span><b id="fps">—</b></div>
     <div class="metric"><span>Frame time</span><b id="ms">—</b></div>
@@ -48,11 +56,25 @@
     <button id="scaleBtn">Render scale: 100%</button>
   </div>
   <div id="controls">
-    Click viewport to capture mouse · mouse move: look · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move · <kbd>Q</kbd>/<kbd>E</kbd>: down/up · <kbd>Esc</kbd>: release mouse
+    Mobile: drag the scene to look and hold the arrow buttons to move. Desktop: click scene, move mouse, use WASD and Q/E.
   </div>
   <div id="error"></div>
 </section>
-<div id="notice">Prototype milestone 1: a lightweight, dependency-free WebGL scene. The boxy room and red figures are test geometry, not final DOOM assets. Next: parse a freely licensed Freedoom WAD and replace these placeholders with level geometry and monster models.</div>
+<div id="notice">Prototype 0.3: touch controls enabled.</div>
+<div class="lookHint">Drag the scene to look around · hold the arrows to move</div>
+<div id="touchControls" aria-label="Touch movement controls">
+  <div class="pad">
+    <button class="moveBtn up" data-key="KeyW" aria-label="Move forward">▲</button>
+    <button class="moveBtn left" data-key="KeyA" aria-label="Move left">◀</button>
+    <button class="moveBtn down" data-key="KeyS" aria-label="Move backward">▼</button>
+    <button class="moveBtn right" data-key="KeyD" aria-label="Move right">▶</button>
+  </div>
+  <div class="vertical">
+    <button class="moveBtn" data-key="KeyE" aria-label="Move up">＋</button>
+    <button class="moveBtn" data-key="KeyQ" aria-label="Move down">－</button>
+    <button class="moveBtn" id="touchReset" aria-label="Reset camera" style="font-size:14px">RESET</button>
+  </div>
+</div>
 <script>
 (() => {
 'use strict';
@@ -144,9 +166,22 @@ const mat4={
 let cam={x:0,y:2.2,z:12,yaw:Math.PI,pitch:-.08};
 const start={...cam}; const keys={}; let wire=false,culling=true,scaleFactor=1,dragging=false,lastX=0,lastY=0;
 function reset(){cam={...start};}
-canvas.addEventListener('click',()=>{if(document.pointerLockElement!==canvas)canvas.requestPointerLock?.();});
+// Desktop uses pointer lock; mobile uses drag-to-look.
+canvas.addEventListener('click',()=>{if(matchMedia('(hover:hover) and (pointer:fine)').matches && document.pointerLockElement!==canvas)canvas.requestPointerLock?.();});
 document.addEventListener('pointerlockchange',()=>{dragging=document.pointerLockElement===canvas;});
 document.addEventListener('mousemove',e=>{if(!dragging)return;cam.yaw-=e.movementX*.0025;cam.pitch-=e.movementY*.0025;cam.pitch=Math.max(-1.45,Math.min(1.45,cam.pitch));});
+let lookPointer=null, lastTouchX=0, lastTouchY=0;
+canvas.addEventListener('pointerdown',e=>{if(e.pointerType==='touch'){lookPointer=e.pointerId;lastTouchX=e.clientX;lastTouchY=e.clientY;canvas.setPointerCapture?.(e.pointerId);}});
+canvas.addEventListener('pointermove',e=>{if(e.pointerType==='touch' && lookPointer===e.pointerId){const dx=e.clientX-lastTouchX,dy=e.clientY-lastTouchY;cam.yaw-=dx*.006;cam.pitch-=dy*.006;cam.pitch=Math.max(-1.45,Math.min(1.45,cam.pitch));lastTouchX=e.clientX;lastTouchY=e.clientY;}});
+function endLook(e){if(lookPointer===e.pointerId)lookPointer=null;}
+canvas.addEventListener('pointerup',endLook);canvas.addEventListener('pointercancel',endLook);
+document.querySelectorAll('[data-key]').forEach(btn=>{
+ const key=btn.dataset.key;
+ const startMove=e=>{e.preventDefault();keys[key]=true;btn.setPointerCapture?.(e.pointerId);};
+ const stopMove=e=>{e.preventDefault();keys[key]=false;};
+ btn.addEventListener('pointerdown',startMove);btn.addEventListener('pointerup',stopMove);btn.addEventListener('pointercancel',stopMove);btn.addEventListener('lostpointercapture',stopMove);
+});
+document.getElementById('touchReset')?.addEventListener('click',reset);
 window.addEventListener('keydown',e=>{keys[e.code]=true;if(['Space','ArrowUp','ArrowDown'].includes(e.code))e.preventDefault();});
 window.addEventListener('keyup',e=>keys[e.code]=false);
 document.getElementById('wireBtn').onclick=()=>{wire=!wire;document.getElementById('wire').textContent=wire?'ON':'OFF';};
